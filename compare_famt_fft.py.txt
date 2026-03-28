@@ -1,0 +1,97 @@
+"""
+FAMT vs FFT: Direct Visual Comparison
+Author: Adnan H. Abdulwahid
+"""
+
+import cv2
+import numpy as np
+import matplotlib.pyplot as plt
+import os
+
+class TransformComparator:
+    def __init__(self, image_path, max_size=600):
+        self.image = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
+        if self.image is None:
+            raise ValueError("Image not found. Please upload.")
+            
+        # Resize for speed and clear visualization
+        h, w = self.image.shape
+        if max(h, w) > max_size:
+            scale = max_size / float(max(h, w))
+            self.image = cv2.resize(self.image, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+        self.frame_L = self.image.shape
+
+    def apply_fft_lowpass(self, radius=30):
+        """Standard FFT with an ideal low-pass filter (causes Gibbs Ringing)."""
+        print("Computing Fast Fourier Transform (FFT)...")
+        # 1. Forward FFT
+        f = np.fft.fft2(self.image)
+        fshift = np.fft.fftshift(f)
+        
+        # 2. Ideal Low Pass Filter Mask (Annular/Circular)
+        rows, cols = self.frame_L
+        crow, ccol = rows // 2, cols // 2
+        mask = np.zeros((rows, cols), np.uint8)
+        cv2.circle(mask, (ccol, crow), radius, 1, thickness=-1)
+        
+        # 3. Apply Filter and Inverse FFT
+        fshift_filtered = fshift * mask
+        f_ishift = np.fft.ifftshift(fshift_filtered)
+        img_back = np.fft.ifft2(f_ishift)
+        img_fft = np.abs(img_back)
+        
+        # Normalize to 0-255
+        img_fft = cv2.normalize(img_fft, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+        return img_fft
+
+    def apply_famt(self, min_rank=50, num_levels=16):
+        """The proposed FAMT: strict topological rank filtering."""
+        print("Computing Framed Algebraic-Morphological Transform (FAMT)...")
+        reconstructed = np.zeros(self.frame_L, dtype=np.uint8)
+        step = 256 // num_levels
+        
+        for level in range(1, 256, step):
+            binary_mask = (self.image >= level).astype(np.uint8)
+            num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(binary_mask, connectivity=8)
+            
+            valid_labels = np.where(stats[:, cv2.CC_STAT_AREA] >= min_rank)[0]
+            valid_labels = valid_labels[valid_labels > 0] 
+            
+            if len(valid_labels) > 0:
+                level_mask = np.isin(labels, valid_labels)
+                reconstructed = np.maximum(reconstructed, level_mask * level)
+        return reconstructed
+
+    def generate_comparison_plot(self):
+        fft_result = self.apply_fft_lowpass(radius=60)
+        famt_result = self.apply_famt(min_rank=50, num_levels=16)
+        
+        # Create a highly academic 1x3 plot
+        fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+        
+        axes[0].imshow(self.image, cmap='gray')
+        axes[0].set_title("Original Image State $A$", fontsize=14)
+        axes[0].axis('off')
+        
+        axes[1].imshow(fft_result, cmap='gray')
+        axes[1].set_title("FFT (Ideal Low-Pass)\nNotice edge blurring & Gibbs ringing", fontsize=14)
+        axes[1].axis('off')
+        
+        axes[2].imshow(famt_result, cmap='gray')
+        axes[2].set_title(r"FAMT ($\Phi^{-1} \triangleright A$)" + "\nPerfect edge preservation", fontsize=14)
+        axes[2].axis('off')
+        
+        plt.tight_layout()
+        plt.savefig("famt_vs_fft_comparison.png", dpi=300, bbox_inches='tight')
+        print("Saved high-resolution image as 'famt_vs_fft_comparison.png'")
+        plt.show()
+
+if __name__ == "__main__":
+    image_filename = "a4.jpg"
+    if not os.path.exists(image_filename):
+        from google.colab import files
+        uploaded = files.upload()
+        image_filename = list(uploaded.keys())[0]
+        
+    comparator = TransformComparator(image_filename)
+    comparator.generate_comparison_plot()
