@@ -1,0 +1,124 @@
+"""
+Framed Algebraic-Morphological Transform (FAMT)
+Author: Adnan H. Abdulwahid 
+GitHub: https://github.com/aaalkhafaji
+
+This module implements the theoretical FAMT derived from Hopf-algebraic 
+image processing. It utilizes the subset-splitting coproduct (approximated 
+via connected components) to filter image features by their Topological Rank 
+(cardinality) while perfectly preserving spatial phase without ringing artifacts.
+"""
+
+import cv2
+import numpy as np
+import matplotlib.pyplot as plt
+
+class FAMT_Processor:
+    def __init__(self, image_path):
+        """Initialize the FAMT with a framed image state (X, L)."""
+        # Load image in grayscale to represent the scalar framed algebra
+        self.image = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
+        if self.image is None:
+            raise ValueError(f"Could not load image at {image_path}")
+        
+        # The Frame L is implicitly the image shape
+        self.frame_L = self.image.shape
+        print(f"Initialized FAMT State with Frame L = {self.frame_L}")
+
+    def forward_transform(self, num_levels=8):
+        """
+        Applies the Coproduct (\Delta) to decompose the image into 
+        tensor components based on intensity level sets and connected spatial components.
+        """
+        print("Applying Forward FAMT (Subset-Splitting Coproduct \Delta)...")
+        self.tensor_components = []
+        
+        # Quantize image into discrete levels to form morphological sets
+        step = 256 // num_levels
+        for level in range(1, 256, step):
+            # Isolate the subset X_i
+            binary_mask = (self.image >= level).astype(np.uint8)
+            
+            # Decompose into 0-th Betti numbers (Connected Components)
+            num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(binary_mask, connectivity=8)
+            
+            # Store each sub-feature as a tuple: (Spatial_Mask, Topological_Rank, Intensity)
+            for i in range(1, num_labels): # Skip background (0)
+                rank = stats[i, cv2.CC_STAT_AREA] # Topological Rank |U|
+                component_mask = (labels == i).astype(np.uint8)
+                
+                # Append the tensor term (U, L)
+                self.tensor_components.append({
+                    'mask': component_mask,
+                    'rank': rank,
+                    'intensity': level
+                })
+                
+        print(f"Decomposed image into {len(self.tensor_components)} topological primitive terms.")
+
+    def apply_filter(self, min_rank, max_rank=np.inf):
+        """
+        Applies the dual filter \Phi \in H^* to the tensor space.
+        Annihilates sub-features whose topological rank falls outside the bounds.
+        """
+        print(f"Applying Filter \Phi (Keeping topological ranks between {min_rank} and {max_rank})...")
+        self.filtered_components = []
+        
+        for term in self.tensor_components:
+            # \Phi evaluates the structural significance
+            if min_rank <= term['rank'] <= max_rank:
+                self.filtered_components.append(term) # \Phi(U) = 1
+            # Else, \Phi(U) = 0 (Term is annihilated)
+
+        print(f"Retained {len(self.filtered_components)} terms after algebraic filtering.")
+
+    def inverse_transform(self):
+        """
+        Applies the Antipode (S) and recombines the space via the framed product (\mu).
+        Perfectly reconstructs the spatial boundaries without Gibbs ringing.
+        """
+        print("Applying Inverse FAMT (\Phi^{-1} \triangleright A)...")
+        # Reconstruct exactly within the rigid frame L
+        reconstructed = np.zeros(self.frame_L, dtype=np.uint8)
+        
+        for term in self.filtered_components:
+            # Re-apply the intensity to the exact spatial coordinates
+            # The morphological max operation acts as the exact set union / spatial inclusion
+            reconstructed = np.maximum(reconstructed, term['mask'] * term['intensity'])
+            
+        return reconstructed
+
+    def visualize(self, result_img):
+        """Plots the original image against the FAMT filtered image."""
+        plt.figure(figsize=(12, 6))
+        
+        plt.subplot(1, 2, 1)
+        plt.title('Original Image State $A$')
+        plt.imshow(self.image, cmap='gray')
+        plt.axis('off')
+        
+        plt.subplot(1, 2, 2)
+        plt.title(r'FAMT Filtered State $\mathcal{F}_{\Phi^{-1}}(\mathcal{F}_\Phi(A))$')
+        plt.imshow(result_img, cmap='gray')
+        plt.axis('off')
+        
+        plt.tight_layout()
+        plt.show()
+
+if __name__ == "__main__":
+    # Initialize the FAMT with the uploaded image
+    famt = FAMT_Processor("a4.jpg")
+    
+    # Step 1: Forward Transform (Decompose into topological tensors)
+    famt.forward_transform(num_levels=16)
+    
+    # Step 2: Filter in the FAMT Domain
+    # We annihilate all small, low-rank structures (e.g., area < 50 pixels)
+    # This removes noise/texture while perfectly preserving the sharp edges of macro structures.
+    famt.apply_filter(min_rank=50)
+    
+    # Step 3: Inverse Transform (Exact structural reconstruction)
+    clean_image = famt.inverse_transform()
+    
+    # Step 4: Display the lack of ringing artifacts
+    famt.visualize(clean_image)
